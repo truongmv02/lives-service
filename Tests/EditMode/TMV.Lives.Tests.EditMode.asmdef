@@ -1,0 +1,11 @@
+{
+  "name": "TMV.Lives.Tests.EditMode",
+  "rootNamespace": "TMV.Lives.Tests",
+  "references": ["TMV.Lives", "TMV.Lives.Tests.Shared", "UnityEngine.TestRunner", "UnityEditor.TestRunner"],
+  "includePlatforms": ["Editor"],
+  "overrideReferences": true,
+  "allowUnsafeCode": false,
+  "autoReferenced": false,
+  "precompiledReferences": ["nunit.framework.dll"],
+  "noEngineReferences": false
+}

@@ -1,0 +1,11 @@
+{
+  "name": "TMV.Lives.Tests.PlayMode",
+  "rootNamespace": "TMV.Lives.Tests",
+  "references": ["TMV.Lives", "TMV.Lives.Tests.Shared", "UnityEngine.TestRunner"],
+  "includePlatforms": [],
+  "overrideReferences": true,
+  "allowUnsafeCode": false,
+  "autoReferenced": false,
+  "precompiledReferences": ["nunit.framework.dll"],
+  "noEngineReferences": false
+}

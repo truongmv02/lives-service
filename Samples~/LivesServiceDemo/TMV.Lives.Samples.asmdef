@@ -1,0 +1,16 @@
+{
+  "name": "TMV.Lives.Samples",
+  "rootNamespace": "TMV.Lives.Samples",
+  "references": [
+    "TMV.Lives"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

@@ -1,0 +1,10 @@
+{
+  "name": "TMV.Lives.Tests.Shared",
+  "rootNamespace": "TMV.Lives.Tests",
+  "references": ["TMV.Lives"],
+  "includePlatforms": [],
+  "overrideReferences": false,
+  "allowUnsafeCode": false,
+  "autoReferenced": false,
+  "noEngineReferences": false
+}
