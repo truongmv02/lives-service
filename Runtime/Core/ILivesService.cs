@@ -39,8 +39,9 @@ namespace TMV.Lives
         void Initialize();
 
         /// <summary>
-        /// Attempt to spend one life. Returns false only when Lives == 0 and infinite
-        /// lives are not active. When infinite lives are active, count is unchanged.
+        /// Attempt to spend one life. Returns false when Lives == 0 (and infinite is not active),
+        /// or when infinite lives are active (count is unchanged in both cases).
+        /// Check HasInfiniteLives to distinguish the two.
         /// </summary>
         bool ConsumeLife();
 

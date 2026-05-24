@@ -20,10 +20,10 @@ puzzle games, with zero engine dependencies in the core.
 | Recovery          | O(1) integer-division catch-up. Handles arbitrary offline duration.           |
 | Infinite lives    | Timed override via `GrantInfinite(seconds)`. Replace-not-stack semantics.     |
 | Persistence       | `ILivesStorage` interface + `PlayerPrefsLivesStorage` adapter.                |
-| Notifications     | Optional `ILivesNotificationScheduler` + `UnityNotificationScheduler` (Android/iOS). |
+| Notifications     | Optional `ILivesNotificationScheduler` + `UnityNotificationScheduler` (Android/iOS). 3-second grace period after full recovery. |
 | Config            | `LivesConfigProvider` base class — subclass for ScriptableObject or remote.   |
 | Server sync       | `LivesData` DTO mirrors storage field-for-field.                              |
-| Tests             | EditMode + PlayMode + shared fakes assembly.                                  |
+| Tests             | 49 EditMode tests, fakes co-located in `Tests/EditMode/`.                     |
 | Sample            | `Samples~/LivesServiceDemo` — interactive UI demo scene.                      |
 
 ---
@@ -35,12 +35,16 @@ puzzle games, with zero engine dependencies in the core.
   - Events: `OnLivesChanged(int newCount)`, `OnInfiniteLivesChanged`.
   - Methods: `Initialize`, `ConsumeLife`, `AddLives`, `SetMaxLives`, `GrantInfinite`,
     `RefillLives`, `Tick(float dt)`, `UpdateRecovery`.
+  - `ConsumeLife` returns `false` in two cases: `Lives == 0` (and infinite not active), or
+    `HasInfiniteLives` active (count unchanged). Callers check `HasInfiniteLives` to distinguish.
 
 - **`LivesService`** — default implementation. Constructor takes:
   - `ILivesStorage storage` (required)
   - `LivesConfigProvider configProvider` (required)
   - `Func<DateTime> utcClock = null` (defaults to `DateTime.UtcNow`)
   - `ILivesNotificationScheduler notifications = null` (optional)
+  - Clock is sampled once per `ApplyPendingTransitions` call and shared across the infinite-expiry
+    and offline-recovery checks to ensure a consistent view of "now".
 
 - **`LivesConfig`** — tuning parameters:
   - `DefaultMaxLives` (default `5`)
@@ -87,10 +91,11 @@ puzzle games, with zero engine dependencies in the core.
 - **`PlayerPrefsLivesStorage`** — `ILivesStorage` backed by `PlayerPrefs`. Unix-second
   timestamps stored as strings (PlayerPrefs has no native `Int64`).
 - **`UnityNotificationScheduler`** — `ILivesNotificationScheduler` backed by
-  `com.unity.mobile.notifications`.
-  - Android: registers a notification channel on first use.
+  `com.unity.mobile.notifications`. The class is compiled only when that package is
+  present (`#if UNITY_MOBILE_NOTIFICATIONS`, set via `versionDefines` in the asmdef).
+  - Android: registers the notification channel on first use (per-instance flag, so a fresh
+    instance after a Unity Editor Domain Reload re-registers correctly).
   - iOS: schedules via `iOSNotificationCalendarTrigger`.
-  - Other platforms: no-op.
   - Single notification slot — every `Schedule` call cancels the previous one.
 
 ---
@@ -108,9 +113,8 @@ puzzle games, with zero engine dependencies in the core.
 
 ### Added — Tests
 
-- **Shared fakes assembly** (`Tests/Shared/`) — `FakeLivesStorage`,
-  `FakeNotificationScheduler`. Reused by both EditMode and PlayMode test assemblies.
-- **EditMode tests** (`Tests/EditMode/LivesServiceTests.cs`) — coverage includes:
+- **EditMode tests** (`Tests/EditMode/LivesServiceTests.cs`) — 49 tests, no Unity runtime
+  required. Coverage includes:
   - `Initialize` — first launch, MaxLives clamp, cold-launch offline recovery
     (single, multi-cycle, multi-cycle + partial).
   - `ConsumeLife` — happy path, empty pool, infinite override, timer start vs preservation,
@@ -122,10 +126,12 @@ puzzle games, with zero engine dependencies in the core.
   - `AddLives` / `SetMaxLives` / `GrantInfinite` / `RefillLives` — caps, timer clears,
     notification cancels, zero/invalid input ignored, replace-not-stack semantics.
   - `TimeUntilNextLife` — zero when full, remaining while recovering, clamped past cycle.
-  - Notifications — schedule fires at `RecoveryStart + SecondsToRecover * livesToRecover`;
-    rescheduled after partial recovery.
-- **PlayMode test** (`Tests/PlayMode/LivesServicePlayModeTests.cs`) — recovery driven by
-  real frame timing via `Tick`.
+  - Notifications — schedule fires at `RecoveryStart + SecondsToRecover * livesToRecover + 3s grace`;
+    rescheduled after `AddLives`, `SetMaxLives`, and partial `Tick` recovery. The 3-second
+    grace period prevents the notification from arriving while the player is still in the
+    session that consumed the last life.
+- **Test fakes** (`Tests/EditMode/FakeLivesStorage.cs`, `FakeNotificationScheduler.cs`) —
+  co-located with the EditMode fixture; no separate shared assembly.
 
 ---
 

@@ -1,6 +1,16 @@
 {
   "name": "TMV.Lives",
   "rootNamespace": "TMV.Lives",
-  "references": [],
-  "autoReferenced": true
+  "references": [
+    "Unity.Notifications.Android",
+    "Unity.Notifications.iOS"
+  ],
+  "autoReferenced": true,
+  "versionDefines": [
+    {
+      "name": "com.unity.mobile.notifications",
+      "expression": "",
+      "define": "UNITY_MOBILE_NOTIFICATIONS"
+    }
+  ]
 }

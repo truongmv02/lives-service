@@ -647,13 +647,13 @@ namespace TMV.Lives.Tests
         public void ConsumeLife_SchedulesNotificationAtFullRecoveryTime()
         {
             // Scenario: Lives=5 → ConsumeLife (now 4/5, needs 1 cycle to refill).
-            // Expected: exactly one notification is scheduled, firing at now + SecondsToRecover (the moment Lives reaches max again).
+            // Expected: exactly one notification is scheduled, firing at now + SecondsToRecover + grace period (the moment Lives reaches max again).
             _storage.Lives = 5; _storage.MaxLives = 5;
             var sut = Build();
             sut.ConsumeLife();
             Assert.That(_notifications.ScheduleCallCount, Is.EqualTo(1));
             var expectedFireAt = DateTime.UnixEpoch.AddSeconds(
-                TimestampNow + _config.SecondsToRecover);
+                TimestampNow + _config.SecondsToRecover + NotificationGracePeriodSeconds);
             Assert.That(_notifications.LastScheduledFireAt, Is.EqualTo(expectedFireAt));
         }
 
@@ -662,7 +662,7 @@ namespace TMV.Lives.Tests
         {
             // Scenario: Lives=1/5 recovering, then AddLives(2) brings Lives to 3/5.
             // Expected: the pending "lives full" notification is rescheduled for the new (shorter) deficit
-            // — fire-at = RecoveryStartUtc + SecondsToRecover * (5 - 3) = startTs + 2 cycles.
+            // — fire-at = RecoveryStartUtc + SecondsToRecover * (5 - 3) + grace = startTs + 2 cycles + 3s.
             long startTs = TimestampNow;
             _storage.Lives = 1; _storage.MaxLives = 5;
             _storage.RecoveryStartUtc = startTs;
@@ -670,7 +670,7 @@ namespace TMV.Lives.Tests
             int initialScheduleCount = _notifications.ScheduleCallCount;
             sut.AddLives(2);
             Assert.That(_notifications.ScheduleCallCount, Is.GreaterThan(initialScheduleCount));
-            var expectedFireAt = DateTime.UnixEpoch.AddSeconds(startTs + _config.SecondsToRecover * 2);
+            var expectedFireAt = DateTime.UnixEpoch.AddSeconds(startTs + _config.SecondsToRecover * 2 + NotificationGracePeriodSeconds);
             Assert.That(_notifications.LastScheduledFireAt, Is.EqualTo(expectedFireAt));
         }
 
@@ -678,7 +678,7 @@ namespace TMV.Lives.Tests
         public void SetMaxLives_LowerWhileRecovering_ReschedulesNotificationForShortenedDeficit()
         {
             // Scenario: Lives=2/5 recovering, SetMaxLives(3) — cap shrank, deficit drops from 3 to 1.
-            // Expected: notification rescheduled for the new deficit: startTs + 1 cycle.
+            // Expected: notification rescheduled for the new deficit: startTs + 1 cycle + grace.
             long startTs = TimestampNow;
             _storage.Lives = 2; _storage.MaxLives = 5;
             _storage.RecoveryStartUtc = startTs;
@@ -687,7 +687,7 @@ namespace TMV.Lives.Tests
             sut.SetMaxLives(3);
             Assert.That(sut.IsFull, Is.False);
             Assert.That(_notifications.ScheduleCallCount, Is.GreaterThan(initialScheduleCount));
-            var expectedFireAt = DateTime.UnixEpoch.AddSeconds(startTs + _config.SecondsToRecover);
+            var expectedFireAt = DateTime.UnixEpoch.AddSeconds(startTs + _config.SecondsToRecover + NotificationGracePeriodSeconds);
             Assert.That(_notifications.LastScheduledFireAt, Is.EqualTo(expectedFireAt));
         }
 
@@ -696,7 +696,7 @@ namespace TMV.Lives.Tests
         {
             // Scenario: Lives=3 recovering, advance 1 cycle, Tick (recovers 1 life → 4/5, 1 life still missing).
             // Expected: a new notification is scheduled for when the LAST missing life would refill —
-            // i.e., at startTs + 2 cycles, so the player gets pinged exactly when they hit max.
+            // i.e., at startTs + 2 cycles + grace, so the player gets pinged exactly when they hit max.
             long startTs = TimestampNow;
             _storage.Lives = 3; _storage.MaxLives = 5;
             _storage.RecoveryStartUtc = startTs;
@@ -706,11 +706,14 @@ namespace TMV.Lives.Tests
             sut.Tick(0f);
             Assert.That(sut.Lives, Is.EqualTo(4));
             Assert.That(_notifications.ScheduleCallCount, Is.GreaterThan(initialScheduleCount));
-            var expectedFireAt = DateTime.UnixEpoch.AddSeconds(startTs + _config.SecondsToRecover * 2);
+            var expectedFireAt = DateTime.UnixEpoch.AddSeconds(startTs + _config.SecondsToRecover * 2 + NotificationGracePeriodSeconds);
             Assert.That(_notifications.LastScheduledFireAt, Is.EqualTo(expectedFireAt));
         }
 
         // ── Helper ────────────────────────────────────────────────────────
+
+        /// <summary>Mirror of LivesService.NotificationGracePeriodSeconds.</summary>
+        private const int NotificationGracePeriodSeconds = 3;
 
         private sealed class ConstConfigProvider : LivesConfigProvider
         {

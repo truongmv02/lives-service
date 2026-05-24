@@ -10,6 +10,9 @@
     "type": "git",
     "url": "https://github.com/truongmv/lives-service.git"
   },
+  "dependencies": {
+    "com.unity.mobile.notifications": "2.3.2"
+  },
   "samples": [
     {
       "displayName": "LivesServiceDemo",

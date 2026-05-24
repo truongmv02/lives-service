@@ -87,9 +87,9 @@ replaces a clock interface, keeping the dependency surface minimal.
 
 **Adapter implementations**
 
-| Interface                     | Runtime (Unity)              | Tests/Shared             |
-|-------------------------------|------------------------------|--------------------------|
-| `ILivesStorage`               | `PlayerPrefsLivesStorage`    | `FakeLivesStorage`       |
+| Interface                     | Runtime (Unity)              | Tests/EditMode              |
+|-------------------------------|------------------------------|-----------------------------|
+| `ILivesStorage`               | `PlayerPrefsLivesStorage`    | `FakeLivesStorage`          |
 | `ILivesNotificationScheduler` | `UnityNotificationScheduler` | `FakeNotificationScheduler` |
 
 **Relationships:**
@@ -226,16 +226,11 @@ com.tmv.lives/                                    ← UPM package root
 │       └── UnityNotificationScheduler.cs
 │
 ├── Tests/
-│   ├── Shared/
-│   │   ├── TMV.Lives.Tests.Shared.asmdef
-│   │   ├── FakeLivesStorage.cs
-│   │   └── FakeNotificationScheduler.cs
-│   ├── EditMode/
-│   │   ├── TMV.Lives.Tests.EditMode.asmdef
-│   │   └── LivesServiceTests.cs
-│   └── PlayMode/
-│       ├── TMV.Lives.Tests.PlayMode.asmdef
-│       └── LivesServicePlayModeTests.cs
+│   └── EditMode/
+│       ├── TMV.Lives.Tests.EditMode.asmdef
+│       ├── FakeLivesStorage.cs
+│       ├── FakeNotificationScheduler.cs
+│       └── LivesServiceTests.cs
 │
 └── Samples~/
     └── LivesServiceDemo/
@@ -246,9 +241,6 @@ com.tmv.lives/                                    ← UPM package root
             ├── LivesConfigSO.cs
             └── LivesDemoController.cs
 ```
-
-The shared `Tests/Shared/` assembly hosts the fakes once so both EditMode and PlayMode
-test assemblies can reference them without duplication.
 
 ---
 
@@ -271,9 +263,12 @@ test assemblies can reference them without duplication.
     "type": "git",
     "url": "https://github.com/truongmv/lives-service.git"
   },
+  "dependencies": {
+    "com.unity.mobile.notifications": "2.3.2"
+  },
   "samples": [
     {
-      "displayName": "Lives Service Demo",
+      "displayName": "LivesServiceDemo",
       "description": "Interactive UI demo: displays lives, infinite lives status, and buttons to add/consume/refill/grant infinite/reset lives.",
       "path": "Samples~/LivesServiceDemo"
     }
@@ -289,8 +284,18 @@ test assemblies can reference them without duplication.
 {
   "name": "TMV.Lives",
   "rootNamespace": "TMV.Lives",
-  "references": [],
-  "autoReferenced": true
+  "references": [
+    "Unity.Notifications.Android",
+    "Unity.Notifications.iOS"
+  ],
+  "autoReferenced": true,
+  "versionDefines": [
+    {
+      "name": "com.unity.mobile.notifications",
+      "expression": "",
+      "define": "UNITY_MOBILE_NOTIFICATIONS"
+    }
+  ]
 }
 ```
 
@@ -395,8 +400,9 @@ namespace TMV.Lives
         void Initialize();
 
         /// <summary>
-        /// Attempt to spend one life. Returns false only when Lives == 0 and infinite
-        /// lives are not active. When infinite lives are active, count is unchanged.
+        /// Attempt to spend one life. Returns false when Lives == 0 (and infinite is not active),
+        /// or when infinite lives are active (count is unchanged in both cases).
+        /// Check HasInfiniteLives to distinguish the two.
         /// </summary>
         bool ConsumeLife();
 
@@ -521,6 +527,9 @@ namespace TMV.Lives
     public sealed class LivesService : ILivesService
     {
         #region Fields
+
+        /// <summary>Extra delay after full recovery before firing the notification, so a user mid-game is not interrupted.</summary>
+        private const int NotificationGracePeriodSeconds = 3;
 
         private readonly ILivesStorage _storage;
         private readonly ILivesNotificationScheduler _notifications;
@@ -723,26 +732,27 @@ namespace TMV.Lives
         /// during the infinite grant still counts toward the next life.
         private (bool infiniteExpired, bool livesRecovered) ApplyPendingTransitions()
         {
+            long nowTs = NowUnixSeconds();
+            bool infiniteActive = _storage.InfiniteLivesEndUtc > 0 && nowTs < _storage.InfiniteLivesEndUtc;
             bool infiniteExpired = false;
             bool livesRecovered = false;
 
-            if (_storage.InfiniteLivesEndUtc > 0 && !HasInfiniteLives)
+            if (_storage.InfiniteLivesEndUtc > 0 && !infiniteActive)
             {
                 _storage.InfiniteLivesEndUtc = 0;
                 infiniteExpired = true;
             }
 
-            if (!IsFull && !HasInfiniteLives && _storage.RecoveryStartUtc != 0)
-                livesRecovered = ApplyOfflineRecovery(_utcClock());
+            if (!IsFull && !infiniteActive && _storage.RecoveryStartUtc != 0)
+                livesRecovered = ApplyOfflineRecovery(nowTs);
 
             return (infiniteExpired, livesRecovered);
         }
 
         /// Computes how many lives should have recovered since RecoveryStartUtc and applies them.
         /// Uses integer division to handle multiple missed intervals in one call (offline catch-up).
-        private bool ApplyOfflineRecovery(DateTime now)
+        private bool ApplyOfflineRecovery(long nowTs)
         {
-            long nowTs = (long)(now - DateTime.UnixEpoch).TotalSeconds;
             long elapsed = Math.Max(0, nowTs - _storage.RecoveryStartUtc);
             int intervalSec = _config.SecondsToRecover;
             int livesToAdd = (int)(elapsed / intervalSec);
@@ -769,10 +779,11 @@ namespace TMV.Lives
 
         private void ScheduleFullLivesNotification()
         {
-            if (IsFull || HasInfiniteLives || _notifications == null) return;
+            if (IsFull || HasInfiniteLives || _notifications == null || _storage.RecoveryStartUtc == 0) return;
 
             long livesToRecover = _storage.MaxLives - _storage.Lives;
-            long fullRecoveryAt = _storage.RecoveryStartUtc + _config.SecondsToRecover * livesToRecover;
+            long fullRecoveryAt = _storage.RecoveryStartUtc + _config.SecondsToRecover * livesToRecover
+                                  + NotificationGracePeriodSeconds;
 
             _notifications.Schedule(
                 _config.NotificationTitle,
@@ -857,18 +868,19 @@ namespace TMV.Lives.Unity
 ```csharp
 using System;
 
-#if UNITY_ANDROID
+#if UNITY_MOBILE_NOTIFICATIONS && UNITY_ANDROID
 using Unity.Notifications.Android;
-#elif UNITY_IOS
+#elif UNITY_MOBILE_NOTIFICATIONS && UNITY_IOS
 using Unity.Notifications.iOS;
 #endif
 
 namespace TMV.Lives.Unity
 {
+#if UNITY_MOBILE_NOTIFICATIONS
     /// <summary>
     /// ILivesNotificationScheduler backed by Unity Mobile Notifications.
     /// Requires the com.unity.mobile.notifications package.
-    /// Supports Android and iOS via platform compile guards; a no-op on other platforms.
+    /// Supports Android and iOS via platform compile guards.
     /// </summary>
     public sealed class UnityNotificationScheduler : ILivesNotificationScheduler
     {
@@ -906,9 +918,9 @@ namespace TMV.Lives.Unity
         #region Private/Protected Methods
 
 #if UNITY_ANDROID
-        private static bool _androidChannelRegistered;
+        private bool _androidChannelRegistered;
 
-        private static void EnsureAndroidChannel()
+        private void EnsureAndroidChannel()
         {
             if (_androidChannelRegistered) return;
 
@@ -923,7 +935,7 @@ namespace TMV.Lives.Unity
             _androidChannelRegistered = true;
         }
 
-        private static void ScheduleAndroid(string title, string body, DateTime fireAtUtc)
+        private void ScheduleAndroid(string title, string body, DateTime fireAtUtc)
         {
             // Android 8+ requires a registered channel before any notification can be posted.
             EnsureAndroidChannel();
@@ -941,16 +953,17 @@ namespace TMV.Lives.Unity
                 notification, ChannelId, NotificationId);
         }
 #elif UNITY_IOS
-        private static void ScheduleIos(string title, string body, DateTime fireAtUtc)
+        private void ScheduleIos(string title, string body, DateTime fireAtUtc)
         {
+            var localTime = fireAtUtc.ToLocalTime();
             var trigger = new iOSNotificationCalendarTrigger
             {
-                Year    = fireAtUtc.ToLocalTime().Year,
-                Month   = fireAtUtc.ToLocalTime().Month,
-                Day     = fireAtUtc.ToLocalTime().Day,
-                Hour    = fireAtUtc.ToLocalTime().Hour,
-                Minute  = fireAtUtc.ToLocalTime().Minute,
-                Second  = fireAtUtc.ToLocalTime().Second,
+                Year    = localTime.Year,
+                Month   = localTime.Month,
+                Day     = localTime.Day,
+                Hour    = localTime.Hour,
+                Minute  = localTime.Minute,
+                Second  = localTime.Second,
                 Repeats = false
             };
 
@@ -970,29 +983,13 @@ namespace TMV.Lives.Unity
 
         #endregion
     }
+#endif
 }
 ```
 
 ---
 
-### `Tests/Shared/TMV.Lives.Tests.Shared.asmdef`
-
-```json
-{
-  "name": "TMV.Lives.Tests.Shared",
-  "rootNamespace": "TMV.Lives.Tests",
-  "references": ["TMV.Lives"],
-  "includePlatforms": [],
-  "overrideReferences": false,
-  "allowUnsafeCode": false,
-  "autoReferenced": false,
-  "noEngineReferences": false
-}
-```
-
----
-
-### `Tests/Shared/FakeLivesStorage.cs`
+### `Tests/EditMode/FakeLivesStorage.cs`
 
 ```csharp
 namespace TMV.Lives.Tests
@@ -1014,7 +1011,7 @@ namespace TMV.Lives.Tests
 
 ---
 
-### `Tests/Shared/FakeNotificationScheduler.cs`
+### `Tests/EditMode/FakeNotificationScheduler.cs`
 
 ```csharp
 using System;
@@ -1046,12 +1043,19 @@ namespace TMV.Lives.Tests
 {
   "name": "TMV.Lives.Tests.EditMode",
   "rootNamespace": "TMV.Lives.Tests",
-  "references": ["TMV.Lives", "TMV.Lives.Tests.Shared", "UnityEngine.TestRunner", "UnityEditor.TestRunner"],
+  "references": [
+    "UnityEngine.TestRunner",
+    "UnityEditor.TestRunner",
+    "TMV.Lives"
+  ],
   "includePlatforms": ["Editor"],
-  "overrideReferences": true,
+  "excludePlatforms": [],
   "allowUnsafeCode": false,
-  "autoReferenced": false,
+  "overrideReferences": true,
   "precompiledReferences": ["nunit.framework.dll"],
+  "autoReferenced": false,
+  "defineConstraints": [],
+  "versionDefines": [],
   "noEngineReferences": false
 }
 ```
@@ -1083,79 +1087,13 @@ Coverage groups:
   boundary checks on the `<` infinite expiry comparison.
 - **TimeUntilNextLife** — Zero when full, remaining time while recovering, clamped to Zero
   past the cycle boundary before `Tick` is called.
-- **Notifications** — schedule fires at exactly `RecoveryStart + SecondsToRecover *
-  livesToRecover`; rescheduled after partial recovery.
+- **Notifications** — schedule fires at `RecoveryStart + SecondsToRecover * livesToRecover + 3s grace`;
+  rescheduled after `AddLives`, `SetMaxLives`, and partial `Tick` recovery. The 3-second grace
+  period prevents the notification from arriving while the player is still in the session that
+  consumed the last life.
 
 The fixture uses a private `ConstConfigProvider : LivesConfigProvider` helper that returns
 the test's `LivesConfig` from `Get()`.
-
----
-
-### `Tests/PlayMode/TMV.Lives.Tests.PlayMode.asmdef`
-
-```json
-{
-  "name": "TMV.Lives.Tests.PlayMode",
-  "rootNamespace": "TMV.Lives.Tests",
-  "references": ["TMV.Lives", "TMV.Lives.Tests.Shared", "UnityEngine.TestRunner"],
-  "includePlatforms": [],
-  "overrideReferences": true,
-  "allowUnsafeCode": false,
-  "autoReferenced": false,
-  "precompiledReferences": ["nunit.framework.dll"],
-  "noEngineReferences": false
-}
-```
-
----
-
-### `Tests/PlayMode/LivesServicePlayModeTests.cs`
-
-```csharp
-using System;
-using System.Collections;
-using NUnit.Framework;
-using UnityEngine.TestTools;
-
-namespace TMV.Lives.Tests
-{
-    /// <summary>
-    /// PlayMode tests for LivesService — use when Unity runtime behaviour (coroutines,
-    /// MonoBehaviour lifecycle, frame timing) must be validated alongside the service.
-    /// </summary>
-    public class LivesServicePlayModeTests
-    {
-        [UnityTest]
-        public IEnumerator Tick_CalledEachFrame_RecoveryAdvancesInRealTime()
-        {
-            var storage = new FakeLivesStorage { Lives = 4, MaxLives = 5 };
-            var notifications = new FakeNotificationScheduler();
-            var config = new LivesConfig { DefaultMaxLives = 5, SecondsToRecover = 1 };
-
-            // Freeze time just before recovery completes.
-            var fakeNow = DateTime.UtcNow;
-            storage.RecoveryStartUtc = (long)(fakeNow - DateTime.UnixEpoch).TotalSeconds;
-
-            var sut = new LivesService(storage, new ConstConfigProvider(config), () => fakeNow, notifications);
-            sut.Initialize();
-
-            // Advance clock past the recovery threshold.
-            fakeNow = fakeNow.AddSeconds(2);
-            sut.Tick(0f);
-
-            Assert.That(sut.Lives, Is.EqualTo(5));
-            yield return null;
-        }
-
-        private sealed class ConstConfigProvider : LivesConfigProvider
-        {
-            private readonly LivesConfig _config;
-            public ConstConfigProvider(LivesConfig config) => _config = config;
-            public override LivesConfig Get() => _config;
-        }
-    }
-}
-```
 
 ---
 
@@ -1242,7 +1180,7 @@ platforms without push support. `LivesService` guards every call site.
 // GameBootstrap.cs
 public sealed class GameBootstrap : MonoBehaviour
 {
-    [SerializeField] private LivesConfigProvider _configProvider;   // ScriptableObject asset
+    [SerializeField] private LivesConfigSO _configSO;   // ScriptableObject wrapper (see Config)
 
     public ILivesService Lives { get; private set; }
 
@@ -1251,9 +1189,13 @@ public sealed class GameBootstrap : MonoBehaviour
         ILivesNotificationScheduler notifications =
             Application.isMobilePlatform ? new UnityNotificationScheduler() : null;
 
+        LivesConfigProvider provider = _configSO != null
+            ? _configSO.ToProvider()
+            : new LivesConfigProvider();
+
         Lives = new LivesService(
             new PlayerPrefsLivesStorage(),
-            _configProvider,
+            provider,
             () => DateTime.UtcNow,
             notifications);
 
@@ -1441,10 +1383,29 @@ is intentional and locked in by
 **Single notification slot** — the service always cancels before scheduling. This keeps
 `ILivesNotificationScheduler` simple (no list management) and avoids duplicate notifications.
 
+**Notification requires an active recovery timer** — `ScheduleFullLivesNotification` returns
+early when `RecoveryStartUtc == 0`. Without this guard, calling `ConsumeLife` while not full
+and with no running timer (e.g., after `SetMaxLives` raised the cap) would anchor the fire time
+to Unix epoch and schedule the notification immediately. `ScheduleOrCancelNotification` has the
+same guard; the explicit check in `ScheduleFullLivesNotification` makes it safe regardless of
+which path calls it.
+
+**3-second notification grace period** — `ScheduleFullLivesNotification` adds
+`NotificationGracePeriodSeconds = 3` to the computed recovery timestamp before calling
+`Schedule`. Without this, a player who consumed their last life and is still playing would
+receive the "lives full" notification mid-session the moment the cycle completes.
+
 **Optional notification scheduler** — `LivesService` accepts a nullable
 `ILivesNotificationScheduler` and guards every call site, so non-mobile platforms simply pass
 `null` (or omit the argument) without needing a dedicated null-object adapter.
 
-**Shared fakes assembly** — `FakeLivesStorage` and `FakeNotificationScheduler` live in their
-own `Tests/Shared/` assembly so EditMode and PlayMode tests can reuse them without
-duplication.
+**Single clock snapshot per transition check** — `ApplyPendingTransitions` reads the clock once
+via `NowUnixSeconds()` and passes the result to both the infinite-expiry check and
+`ApplyOfflineRecovery`. This avoids a rare inconsistency where the clock ticks between the two
+checks, and removes the `DateTime → long` conversion from `ApplyOfflineRecovery`.
+
+**Instance channel registration in `UnityNotificationScheduler`** — `_androidChannelRegistered`
+is an instance field rather than `static`. A static flag would survive Unity Editor Domain
+Reloads, meaning the Android notification channel would not be re-registered after a reload and
+subsequent Schedule calls would silently fail in the Editor.
+

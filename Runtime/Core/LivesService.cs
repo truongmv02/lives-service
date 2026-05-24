@@ -10,6 +10,12 @@ namespace TMV.Lives
     {
         #region Fields
 
+        /// <summary>
+        /// Extra delay after full recovery before firing the notification, 
+        /// so a user mid-game is not interrupted.
+        /// </summary>
+        private const int NotificationGracePeriodSeconds = 3;
+
         private readonly ILivesStorage _storage;
         private readonly ILivesNotificationScheduler _notifications;
         private readonly Func<DateTime> _utcClock;
@@ -211,26 +217,27 @@ namespace TMV.Lives
         /// during the infinite grant still counts toward the next life.
         private (bool infiniteExpired, bool livesRecovered) ApplyPendingTransitions()
         {
+            long nowTs = NowUnixSeconds();
+            bool infiniteActive = _storage.InfiniteLivesEndUtc > 0 && nowTs < _storage.InfiniteLivesEndUtc;
             bool infiniteExpired = false;
             bool livesRecovered = false;
 
-            if (_storage.InfiniteLivesEndUtc > 0 && !HasInfiniteLives)
+            if (_storage.InfiniteLivesEndUtc > 0 && !infiniteActive)
             {
                 _storage.InfiniteLivesEndUtc = 0;
                 infiniteExpired = true;
             }
 
-            if (!IsFull && !HasInfiniteLives && _storage.RecoveryStartUtc != 0)
-                livesRecovered = ApplyOfflineRecovery(_utcClock());
+            if (!IsFull && !infiniteActive && _storage.RecoveryStartUtc != 0)
+                livesRecovered = ApplyOfflineRecovery(nowTs);
 
             return (infiniteExpired, livesRecovered);
         }
 
         /// Computes how many lives should have recovered since RecoveryStartUtc and applies them.
         /// Uses integer division to handle multiple missed intervals in one call (offline catch-up).
-        private bool ApplyOfflineRecovery(DateTime now)
+        private bool ApplyOfflineRecovery(long nowTs)
         {
-            long nowTs = (long)(now - DateTime.UnixEpoch).TotalSeconds;
             long elapsed = Math.Max(0, nowTs - _storage.RecoveryStartUtc);
             int intervalSec = _config.SecondsToRecover;
             int livesToAdd = (int)(elapsed / intervalSec);
@@ -257,10 +264,11 @@ namespace TMV.Lives
 
         private void ScheduleFullLivesNotification()
         {
-            if (IsFull || HasInfiniteLives || _notifications == null) return;
+            if (IsFull || HasInfiniteLives || _notifications == null || _storage.RecoveryStartUtc == 0) return;
 
             long livesToRecover = _storage.MaxLives - _storage.Lives;
-            long fullRecoveryAt = _storage.RecoveryStartUtc + _config.SecondsToRecover * livesToRecover;
+            long fullRecoveryAt = _storage.RecoveryStartUtc + _config.SecondsToRecover * livesToRecover
+                                  + NotificationGracePeriodSeconds;
 
             _notifications.Schedule(
                 _config.NotificationTitle,

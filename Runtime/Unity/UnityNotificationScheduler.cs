@@ -1,13 +1,14 @@
 using System;
 
-#if UNITY_ANDROID
+#if UNITY_MOBILE_NOTIFICATIONS && UNITY_ANDROID
 using Unity.Notifications.Android;
-#elif UNITY_IOS
+#elif UNITY_MOBILE_NOTIFICATIONS && UNITY_IOS
 using Unity.Notifications.iOS;
 #endif
 
 namespace TMV.Lives.Unity
 {
+#if UNITY_MOBILE_NOTIFICATIONS
     /// <summary>
     /// ILivesNotificationScheduler backed by Unity Mobile Notifications.
     /// Requires the com.unity.mobile.notifications package.
@@ -49,9 +50,9 @@ namespace TMV.Lives.Unity
         #region Private/Protected Methods
 
 #if UNITY_ANDROID
-        private static bool _androidChannelRegistered;
+        private bool _androidChannelRegistered;
 
-        private static void EnsureAndroidChannel()
+        private void EnsureAndroidChannel()
         {
             if (_androidChannelRegistered) return;
 
@@ -66,7 +67,7 @@ namespace TMV.Lives.Unity
             _androidChannelRegistered = true;
         }
 
-        private static void ScheduleAndroid(string title, string body, DateTime fireAtUtc)
+        private void ScheduleAndroid(string title, string body, DateTime fireAtUtc)
         {
             // Android 8+ requires a registered channel before any notification can be posted.
             EnsureAndroidChannel();
@@ -84,27 +85,28 @@ namespace TMV.Lives.Unity
                 notification, ChannelId, NotificationId);
         }
 #elif UNITY_IOS
-        private static void ScheduleIos(string title, string body, DateTime fireAtUtc)
+        private void ScheduleIos(string title, string body, DateTime fireAtUtc)
         {
+            var localTime = fireAtUtc.ToLocalTime();
             var trigger = new iOSNotificationCalendarTrigger
             {
-                Year   = fireAtUtc.ToLocalTime().Year,
-                Month  = fireAtUtc.ToLocalTime().Month,
-                Day    = fireAtUtc.ToLocalTime().Day,
-                Hour   = fireAtUtc.ToLocalTime().Hour,
-                Minute = fireAtUtc.ToLocalTime().Minute,
-                Second = fireAtUtc.ToLocalTime().Second,
+                Year    = localTime.Year,
+                Month   = localTime.Month,
+                Day     = localTime.Day,
+                Hour    = localTime.Hour,
+                Minute  = localTime.Minute,
+                Second  = localTime.Second,
                 Repeats = false
             };
 
             var notification = new iOSNotification
             {
-                Identifier            = NotificationId.ToString(),
-                Title                 = title,
-                Body                  = body,
-                ShowInForeground      = false,
+                Identifier                   = NotificationId.ToString(),
+                Title                        = title,
+                Body                         = body,
+                ShowInForeground             = false,
                 ForegroundPresentationOption = PresentationOption.Alert | PresentationOption.Sound,
-                Trigger               = trigger
+                Trigger                      = trigger
             };
 
             iOSNotificationCenter.ScheduleNotification(notification);
@@ -113,4 +115,5 @@ namespace TMV.Lives.Unity
 
         #endregion
     }
+#endif
 }
